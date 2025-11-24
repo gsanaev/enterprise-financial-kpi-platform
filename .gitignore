@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+
+# UV environment
+.venv/
+.uv/
+uv.lock
+
+# DuckDB database + temp files
+*.duckdb
+*.duckdb.wal
+
+# Data
+data/raw/
+data/processed/
+
+# VSCode
+.vscode/
+
+# MacOS
+.DS_Store
