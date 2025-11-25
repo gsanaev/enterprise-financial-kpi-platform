@@ -2,12 +2,12 @@
 __pycache__/
 *.pyc
 
-# UV environment
+# Virtual environments
 .venv/
 .uv/
 uv.lock
 
-# DuckDB database + temp files
+# DuckDB database files
 *.duckdb
 *.duckdb.wal
 
@@ -18,5 +18,12 @@ data/processed/
 # VSCode
 .vscode/
 
-# MacOS
+# Jupyter notebooks checkpoints
+.ipynb_checkpoints/
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Power BI autosave files
+*.pbix.autosave
