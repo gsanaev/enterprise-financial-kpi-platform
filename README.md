@@ -29,79 +29,62 @@ This part happens entirely inside Power BI.
 ## 📁 Repository Structure
 ```bash
 enterprise-financial-kpi-platform/
-│
-├── data/
-│   ├── raw/                   # Synthetic CSV files
-│   └── processed/             # PBIX, exports, etc.
-│
-├── dashboards/
+├── dashboards
 │   └── enterprise_financial_kpis.pbix
-│
-├── sql/
-│   ├── 01_create_schema.sql
-│   ├── 02_load_staging_data.sql
-│   ├── 03_transform_core.sql
-│   ├── 04_cost_allocation.sql
-│   └── 05_kpi_views.sql
-│
-├── semantic_model/            # DAX automation layer
-│   ├── create_measures.cs     # Script for Tabular Editor
-│   └── measures/              # Optional JSON definitions
-│       └── measures.json
-│
-├── src/
-│   └── enterprise_financial_kpi_platform/
-│       ├── generate_synthetic_data.py
-│       ├── export_to_sqlite.py
-│       ├── utils.py
-│       └── validate_kpis.py
-│
-├── notebooks/
-│   └── 01_synthetic_data_design.ipynb
-│
-├── finance.sqlite             # Final PowerBI-ready data mart
+├── data
+│   ├── processed
+│   └── raw
+├── finance.duckdb
+├── finance.sqlite
 ├── main.py
-└── README.md
+├── notebooks
+│   └── 01_synthetic_data_design.ipynb
+├── pyproject.toml
+├── README.md
+├── semantic_model
+│   └── create_measures.cs
+├── sql
+│   ├── 01_schema_and_staging.sql
+│   ├── 02_core_kpis.sql
+│   └── 03_product_profitability.sql
+├── src
+│   ├── __init__.py
+│   ├── __pycache__
+│   ├── export_to_sqlite.py
+│   ├── generate_synthetic_data.py
+│   ├── utils.py
+│   └── validate_kpis.py
+└── uv.lock
 ```
 
 ## 🧪 Part I — Data Engineering Workflow  
 **1. Generate Synthetic Data**   
 ```bash
-uv run python -m src.enterprise_financial_kpi_platform.generate_synthetic_data
+uv run python -m src.generate_synthetic_data
 ```
 
 Creates thousands of customers, products, accounts, daily transactions, financial postings.
 Outputs → `data/raw/*.csv`.
 
 **2. Build DuckDB Warehouse**  
-**Create schema**
+**Create Schema and Staging**
 ```bash
-duckdb finance.duckdb -c ".read 'sql/01_create_schema.sql'"
+duckdb finance.duckdb -c ".read 'sql/01_schema_and_staging.sql'"
 ```
 
-**Load staging data**  
+**Create Core KPIs**  
 ```bash
-duckdb finance.duckdb -c ".read 'sql/02_load_staging_data.sql'"
+duckdb finance.duckdb -c ".read 'sql/02_core_kpis.sql'"
 ```
 
-**Transform core layer**  
+**Create Product Profitability**  
 ```bash
-duckdb finance.duckdb -c ".read 'sql/03_transform_core.sql'"
-```
-
-**Cost allocation**  
-```bash
-duckdb finance.duckdb -c ".read 'sql/04_cost_allocation.sql'"
-````
-
-**KPI views**  
-```bash
-duckdb finance.duckdb -c ".read 'sql/05_kpi_views.sql'"
+duckdb finance.duckdb -c ".read 'sql/03_product_profitability.sql'"
 ```
 
 **3. Export final star schema to SQLite (for Power BI)**  
 ```bash
-uv run python src/enterprise_financial_kpi_platform/export_to_sqlite.py
+uv run python src/export_to_sqlite.py
 ```
 
 This produces:
@@ -116,137 +99,4 @@ finance.sqlite
 In Power BI Desktop:
 ```pgsql
 Get Data → Database → SQLite
-```
-
-Select:  
-```
-finance.sqlite
-```
-Load tables:
-- dim_customer  
-- dim_product  
-- dim_time  
-- dim_account  
-- fact_transactions  
-- fact_financials  
-
-**Step 2 — Create _Measures table (manually)**  
-In Power BI:
-```sql
-Model View → New Table
-```
-
-Paste:
-```DAX
-_Measures = {1}
-```
-Then:  
-- hide column **Value**  
-- keep table _Measures  
-
-**Step 3 — Generate DAX measures automatically (Tabular Editor)**
-1. Install **Tabular Editor 2**
-2. In Power BI **→ External Tools → Tabular Editor**
-3. Open file:  
-`semantic_model/create_measures.cs`  
-4. Run the script  
-This will create all KPIs:
-- Revenue (YTD/QTD/MTD/LTM)  
-- COGS (YTD/QTD/MTD/LTM)  
-- Gross Margin %  
-- OPEX  
-- Operating Profit  
-- Operating Margin %  
-- Customers, Active Customers, Churn  
-- Transaction Count  
-- ARPC (Avg Revenue per Customer)  
-All measures are correctly grouped in folders:  
-```css
-Revenue/
-Revenue/Time
-COGS/
-COGS/Time
-Gross Margin/
-Gross Margin/Time
-OPEX & Operating Profit/
-OPEX & Operating Profit/Time
-Volume & Customers/
-```
-**Step 4 — Build Dashboard**  
-Suggested visuals:  
-
-**Executive Summary**  
-- Revenue YTD  
-- Gross Margin %  
-- Operating Profit  
-- Operating Margin %  
-- Active Customers  
-- Churn Rate  
-
-**Trend Visuals**  
-- Revenue MTD/QTD/YTD  
-- Gross Margin trend  
-- Operating Profit trend  
-
-**Dimensional Analysis**  
-- Revenue by Product  
-- Revenue by Customer Segment  
-- Profitability by Product  
-- Customer Lifetime Revenue  
-
-**Transaction Analysis**  
-- Volume  
-- ARPC  
-- Churn logic  
-
-## 🧠 Financial KPIs Included
-**Core**  
-- Revenue  
-- COGS  
-- Gross Margin  
-- OPEX  
-- Operating Profit  
-
-**Margins**  
-- Gross Margin %  
-- Operating Margin %  
-
-**Time Intelligence**  
-- YTD / QTD / MTD / LTM versions for  
-Revenue, COGS, Gross Margin, OPEX, Operating Profit
-
-**Customer / Volume Metrics**
-- Transaction Count  
-- Customers  
-- Active Customers  
-- Churned Customers  
-- Churn Rate  
-- Avg Revenue per Customer  
-- Avg Gross Margin per Customer  
-
-## 🚀 Reproduce Entire Pipeline
-
-To rebuild everything from scratch:
-```bash
-rm finance.duckdb
-duckdb finance.duckdb -c ".read 'sql/01_create_schema.sql'"
-duckdb finance.duckdb -c ".read 'sql/02_load_staging_data.sql'"
-duckdb finance.duckdb -c ".read 'sql/03_transform_core.sql'"
-duckdb finance.duckdb -c ".read 'sql/04_cost_allocation.sql'"
-duckdb finance.duckdb -c ".read 'sql/05_kpi_views.sql'"
-
-uv run python src/enterprise_financial_kpi_platform/export_to_sqlite.py
-```
-
-Then:  
-1. Load **finance.sqlite** in Power BI  
-2. Create `_Measures = {1}`  
-3. Run create_measures.cs via Tabular Editor  
-
-## 🗂 Storing Dashboards
-
-Save Power BI dashboards into:  
-```markdown
-dashboards/
-    enterprise_financial_kpis.pbix  
 ```
