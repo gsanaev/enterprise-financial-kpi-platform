@@ -16,7 +16,15 @@ CREATE TABLE IF NOT EXISTS dim_time (
     year            INTEGER,
     weekday         INTEGER,
     is_month_end    INTEGER,
-    year_month_key  INTEGER GENERATED ALWAYS AS (year*100 + month)
+
+    -- Numeric month key: 202401, 202402, ...
+    year_month_key  INTEGER GENERATED ALWAYS AS (year * 100 + month),
+
+    -- Text label for visuals, derived from date (e.g. '2024-01')
+    year_month_label VARCHAR GENERATED ALWAYS AS (strftime('%Y-%m', date)),
+
+    -- Short month name from date (e.g. 'Jan')
+    month_name      VARCHAR GENERATED ALWAYS AS (strftime('%b', date))
 );
 
 CREATE TABLE IF NOT EXISTS dim_customer (

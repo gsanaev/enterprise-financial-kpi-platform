@@ -45,38 +45,42 @@ SELECT
     dt.year,
     dt.month,
     dt.year_month_key,
+    dt.year_month_label,
     SUM(t.net_revenue) AS revenue
 FROM fact_transactions t
 JOIN dim_time dt USING(date_key)
-GROUP BY 1,2,3;
+GROUP BY 1,2,3,4;
 
 CREATE OR REPLACE VIEW vw_cogs_monthly AS
 SELECT
     dt.year,
     dt.month,
     dt.year_month_key,
+    dt.year_month_label,
     SUM(t.direct_cost) AS cogs
 FROM fact_transactions t
 JOIN dim_time dt USING(date_key)
-GROUP BY 1,2,3;
+GROUP BY 1,2,3,4;
 
 CREATE OR REPLACE VIEW vw_opex_monthly AS
 SELECT
     dt.year,
     dt.month,
     dt.year_month_key,
+    dt.year_month_label,
     SUM(f.amount) * -1 AS opex
 FROM fact_financials f
 JOIN dim_time dt USING(date_key)
 JOIN dim_account a USING(account_id)
 WHERE a.account_type = 'OPEX'
-GROUP BY 1,2,3;
+GROUP BY 1,2,3,4;
 
 CREATE OR REPLACE VIEW vw_pnl_monthly AS
 SELECT
     r.year,
     r.month,
     r.year_month_key,
+    r.year_month_label,
     r.revenue,
     c.cogs,
     r.revenue - c.cogs AS gross_margin,
@@ -114,13 +118,14 @@ SELECT
     dt.year,
     dt.month,
     dt.year_month_key,
+    dt.year_month_label,
     SUM(t.net_revenue) AS revenue,
     SUM(t.direct_cost) AS cogs,
     COUNT(*) AS num_transactions
 FROM fact_transactions t
 JOIN dim_time dt USING(date_key)
 JOIN dim_customer c USING(customer_id)
-GROUP BY 1,2,3,4;
+GROUP BY 1,2,3,4,5;
 
 ---------------------------------------------------------
 -- SEGMENT SUMMARY
