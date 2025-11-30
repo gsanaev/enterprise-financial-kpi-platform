@@ -67,7 +67,6 @@ def get_paths() -> Paths:
     return Paths(project_root=project_root, data_raw=data_raw)
 
 
-
 def date_key_from_timestamp(ts: pd.Timestamp) -> int:
     """Integer key YYYYMMDD."""
     return int(ts.strftime("%Y%m%d"))
@@ -86,7 +85,6 @@ def generate_dim_time(start_date: str, end_date: str) -> pd.DataFrame:
     df["quarter"] = df["date"].dt.quarter
     df["year"] = df["date"].dt.year
     df["weekday"] = df["date"].dt.weekday  # Monday=0
-    # Month end flag
     df["is_month_end"] = df["date"].dt.is_month_end.astype(int)
     return df[
         ["date_key", "date", "day", "month", "quarter", "year", "weekday", "is_month_end"]
@@ -99,23 +97,24 @@ def generate_dim_customer(
     annual_churn_rate: float,
     rng: np.random.Generator,
 ) -> pd.DataFrame:
+    """
+    Uses patched churn logic:
+    - Acquisition spread over first 3 years
+    - Bernoulli trial per year with annual_churn_rate
+    - Churn capped to dataset end
+    """
 
     start = dim_time["date"].min()
     end = dim_time["date"].max()
 
-    # -------------------------------
-    # 1. Acquisition dates
-    # -------------------------------
-    # Spread over first 3 years of dataset
+    # 1. Acquisition dates over first 3 years
     acq_start = start
     acq_end = start + pd.DateOffset(years=3)
 
     acq_dates = acq_start + (acq_end - acq_start) * rng.random(n_customers)
     acq_dates = pd.to_datetime(acq_dates).floor("D")
 
-    # -------------------------------
-    # 2. Churn simulation (Patched!)
-    # -------------------------------
+    # 2. Churn simulation (patched)
     churn_dates = []
 
     for acq in acq_dates:
@@ -126,7 +125,7 @@ def generate_dim_customer(
         while current_year <= end.year:
             if rng.random() < annual_churn_rate:
                 # Churn at a random month of this year
-                month = rng.integers(1, 13)
+                month = int(rng.integers(1, 13))
                 day = 1
                 churn_candidate = pd.Timestamp(year=current_year, month=month, day=day)
 
@@ -145,9 +144,7 @@ def generate_dim_customer(
 
     churn_dates = pd.to_datetime(churn_dates)
 
-    # -------------------------------
     # 3. Segments and regions
-    # -------------------------------
     segments = ["Retail", "SME", "Corporate"]
     regions = ["North", "South", "West", "East", "Central", "International"]
 
@@ -157,9 +154,7 @@ def generate_dim_customer(
     customer_segment = rng.choice(segments, size=n_customers, p=segment_probs)
     customer_region = rng.choice(regions, size=n_customers, p=region_probs)
 
-    # -------------------------------
     # 4. Assemble dimension
-    # -------------------------------
     df = pd.DataFrame(
         {
             "customer_id": np.arange(1, n_customers + 1),
@@ -170,9 +165,7 @@ def generate_dim_customer(
         }
     )
 
-    # -------------------------------
-    # 5. Active flag (Patched!)
-    # -------------------------------
+    # 5. Active flag (patched)
     df["is_active"] = df["churn_date"].isna().astype(int)
 
     return df[
@@ -185,6 +178,10 @@ def generate_dim_product(
     base_margin: float,
     rng: np.random.Generator,
 ) -> pd.DataFrame:
+    """
+    Products with categories and base prices.
+    Slightly biased by category so revenue by category isn't perfectly equal.
+    """
     categories = ["Subscription", "Service", "Loan", "Advisory"]
     cat_probs = [0.4, 0.3, 0.2, 0.1]
 
@@ -192,15 +189,42 @@ def generate_dim_product(
     product_names = [f"Product {i}" for i in product_ids]
     product_categories = rng.choice(categories, size=n_products, p=cat_probs)
 
-    # base prices between 50 and 500
-    base_prices = rng.uniform(50, 500, size=n_products)
+    # Base prices vary by category for more realistic mix
+    base_prices = []
+    direct_cost_ratios = []
 
-    # direct cost ratio: around (1 - base_margin) with some noise
-    direct_cost_ratios = np.clip(
-        1 - base_margin + rng.normal(0, 0.05, size=n_products),
-        0.2,
-        0.8,
-    )
+    for cat in product_categories:
+        if cat == "Subscription":
+            price = rng.uniform(50, 200)   # lower ticket, recurring
+            dcr = np.clip(
+                1 - base_margin + rng.normal(0.00, 0.04),
+                0.25,
+                0.70,
+            )
+        elif cat == "Service":
+            price = rng.uniform(100, 400)
+            dcr = np.clip(
+                1 - base_margin + rng.normal(0.05, 0.05),
+                0.30,
+                0.75,
+            )
+        elif cat == "Loan":
+            price = rng.uniform(300, 800)  # higher ticket
+            dcr = np.clip(
+                1 - base_margin + rng.normal(-0.05, 0.05),
+                0.20,
+                0.65,
+            )
+        else:  # Advisory
+            price = rng.uniform(150, 600)
+            dcr = np.clip(
+                1 - base_margin + rng.normal(0.02, 0.05),
+                0.25,
+                0.72,
+            )
+
+        base_prices.append(price)
+        direct_cost_ratios.append(dcr)
 
     df = pd.DataFrame(
         {
@@ -317,6 +341,23 @@ def segment_revenue_multiplier(segment: str) -> float:
     return 1.0
 
 
+def segment_cost_factor(segment: str) -> float:
+    """
+    Medium-strength margin differences by segment (Option BC):
+    - Retail: baseline
+    - SME: slightly better margin
+    - Corporate: clearly better margin
+    This scales the effective cost ratio: lower factor => higher margin.
+    """
+    if segment == "Retail":
+        return 1.00   # baseline
+    if segment == "SME":
+        return 0.95   # ~5% lower costs
+    if segment == "Corporate":
+        return 0.88   # ~12% lower costs (higher margin)
+    return 1.0
+
+
 def category_revenue_account_id(category: str) -> int:
     if category == "Subscription":
         return 4000
@@ -341,6 +382,14 @@ def generate_fact_transactions(
     dim_time: pd.DataFrame,
     rng: np.random.Generator,
 ) -> pd.DataFrame:
+    """
+    Generate fact_transactions with:
+    - Segment-based frequency and revenue multipliers
+    - Customer-level "spend tier" for realistic inequality
+    - Seasonal effects by quarter
+    - Category-specific margins
+    - Segment-specific cost factor (Option BC: segment + category margin differences)
+    """
     date_index_by_month = build_date_index_by_month(dim_time)
 
     transactions = []
@@ -352,6 +401,14 @@ def generate_fact_transactions(
     seg_mult = {
         seg: segment_revenue_multiplier(seg) for seg in dim_customer["segment"].unique()
     }
+
+    # Customer-level spend tiers: some customers are much bigger than others
+    spend_tiers = rng.choice(
+        [0.5, 1.0, 2.0, 4.0],
+        size=len(dim_customer),
+        p=[0.25, 0.45, 0.25, 0.05],  # most are small/medium, few whales
+    )
+    spend_tier_map = dict(zip(dim_customer["customer_id"].tolist(), spend_tiers))
 
     for _, row in dim_customer.iterrows():
         cust_id = int(row["customer_id"])
@@ -367,8 +424,10 @@ def generate_fact_transactions(
         # Range of months this customer is active
         months = pd.period_range(acq_period, churn_period, freq="M")
 
-        lam = segment_monthly_lambda(seg)
+        base_lam = segment_monthly_lambda(seg)
         seg_factor = seg_mult[seg]
+        seg_cost_mult = segment_cost_factor(seg)
+        cust_spend_tier = spend_tier_map[cust_id]
 
         for period in months:
             year = period.year
@@ -381,7 +440,9 @@ def generate_fact_transactions(
             # seasonal multiplier by quarter
             seas_mult = REVENUE_SEASONALITY.get(quarter, 1.0)
 
-            # number of transactions this month
+            # number of transactions this month:
+            lam = base_lam * cust_spend_tier
+            lam = max(lam, 0.05)
             n_tx = rng.poisson(lam)
             if n_tx == 0:
                 continue
@@ -397,16 +458,20 @@ def generate_fact_transactions(
                 direct_cost_ratio = float(prod["direct_cost_ratio"].item())
 
                 # quantity mostly 1, sometimes more
-                quantity = int(max(1, rng.poisson(1.2)))
+                quantity = int(max(1, rng.poisson(1.1)))
 
-                # revenue with segment + seasonality multiplier + noise
-                mean_price = base_price * seg_factor * seas_mult
-                # lognormal noise around mean
-                noise_factor = rng.lognormal(mean=np.log(1.0), sigma=0.2)
+                # revenue with segment + customer tier + seasonality multiplier + small noise
+                mean_price = base_price * seg_factor * cust_spend_tier * seas_mult
+
+                # lognormal noise around mean, sigma not too large to keep things smooth
+                noise_factor = rng.lognormal(mean=np.log(1.0), sigma=0.15)
                 unit_price = mean_price * noise_factor
 
                 net_revenue = unit_price * quantity
-                direct_cost = net_revenue * direct_cost_ratio
+
+                # Option BC: combine category ratio and segment cost factor
+                effective_cost_ratio = direct_cost_ratio * seg_cost_mult
+                direct_cost = net_revenue * effective_cost_ratio
 
                 channel = rng.choice(["Online", "Branch", "Partner"], p=[0.6, 0.25, 0.15])
 
@@ -450,7 +515,6 @@ def generate_fact_transactions(
         ],
     )
     df["transaction_id"] = np.arange(1, len(df) + 1)
-    # reorder columns
     df = df[
         [
             "transaction_id",
@@ -525,7 +589,6 @@ def generate_fact_financials(
 
     # OPEX: allocate based on monthly total revenue
     # First compute monthly revenue
-    # join with dim_time to get year/month
     rev_daily = (
         revenue_grouped.groupby("date_key", as_index=False)["net_revenue"].sum()
     )
@@ -569,12 +632,11 @@ def generate_fact_financials(
             continue
 
         total_opex = -total_rev * opex_ratio  # negative (cost)
-        # randomise weights a bit per month
         noise = rng.normal(1.0, 0.05, size=n_cc)
         weights = base_weights * noise
         weights = weights / weights.sum()
 
-        for (cc_idx, cc_row), w in zip(cc_df.iterrows(), weights):
+        for (_, cc_row), w in zip(cc_df.iterrows(), weights):
             amount = total_opex * w
             records.append(
                 (

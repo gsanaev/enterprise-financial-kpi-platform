@@ -73,8 +73,10 @@ for table_name in FINAL_EXPORT_LIST:
 
 
 # ============================================================
-# 5. Close connections
+# 5. Vacuum & close (important for Power BI)
 # ============================================================
+sqlite_con.execute("VACUUM")      # <-- REQUIRED FOR POWER BI
+sqlite_con.commit()
 duck_con.close()
 sqlite_con.close()
 
