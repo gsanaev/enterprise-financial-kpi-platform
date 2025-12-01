@@ -1,84 +1,105 @@
+# src/export_to_sqlite.py
+
+"""
+Export selected DuckDB tables and views to a SQLite database.
+
+This script:
+1. Connects to DuckDB (finance.duckdb)
+2. Reads star-schema tables:
+      - dim_time
+      - dim_customer
+      - dim_product
+      - dim_account
+      - dim_cost_center
+      - fact_transactions
+      - fact_financials
+3. Reads KPI views:
+      - vw_pnl_monthly
+      - vw_customer_profitability
+      - vw_product_profitability
+4. Reads ML output:
+      - predicted_churn
+5. Writes all into:
+      finance.sqlite
+
+Power BI connects only to finance.sqlite.
+"""
+
 import duckdb
 import sqlite3
-import os
+import pandas as pd
 
-DUCKDB_PATH = "finance.duckdb"      # Input DuckDB warehouse
-SQLITE_PATH = "finance.sqlite"      # Output SQLite database
+from src.config import PROJECT_ROOT
 
-
-# ============================================================
-# 1. Remove old SQLite file
-# ============================================================
-if os.path.exists(SQLITE_PATH):
-    print(f"Removing existing SQLite file: {SQLITE_PATH}")
-    os.remove(SQLITE_PATH)
+DUCKDB_PATH = PROJECT_ROOT / "finance.duckdb"
+SQLITE_PATH = PROJECT_ROOT / "finance.sqlite"
 
 
-# ============================================================
-# 2. Connect to DuckDB and SQLite
-# ============================================================
-print("Connecting to DuckDB...")
-duck_con = duckdb.connect(DUCKDB_PATH, read_only=True)
-
-print("Creating new SQLite database...")
-sqlite_con = sqlite3.connect(SQLITE_PATH)
+# ---------------------------------------------------------
+# Helper: write a DataFrame to SQLite
+# ---------------------------------------------------------
+def write_table(conn: sqlite3.Connection, name: str, df: pd.DataFrame):
+    df.to_sql(name, conn, if_exists="replace", index=False)
+    print(f"  ✔ Wrote table: {name} ({len(df):,} rows)")
 
 
-# ============================================================
-# 3. Final list of tables to export (solid, fixed, production)
-# ============================================================
+# ---------------------------------------------------------
+# Main export function
+# ---------------------------------------------------------
+def export_to_sqlite():
+    print("🔗 Connecting to DuckDB...")
+    con = duckdb.connect(str(DUCKDB_PATH))
 
-BASE_TABLES = [
-    "dim_time",
-    "dim_customer",
-    "dim_product",
-    "dim_account",
-    "dim_cost_center",
-    "fact_transactions",
-    "fact_financials"
-]
+    print("📦 Exporting tables and views to SQLite...")
+    sqlite_conn = sqlite3.connect(SQLITE_PATH)
 
-SEMANTIC_TABLES = [
-    "vw_revenue_daily",
-    "vw_cogs_daily",
-    "vw_margin_daily",
-    "vw_pnl_monthly",
-    "vw_customer_profitability",
-    "vw_customer_activity_monthly",
-    "vw_segment_summary",
-    "vw_product_profitability"
-]
+    # ------------------------------------
+    # 1. Base dimension & fact tables
+    # ------------------------------------
+    base_tables = [
+        "dim_time",
+        "dim_customer",
+        "dim_product",
+        "dim_account",
+        "dim_cost_center",
+        "fact_transactions",
+        "fact_financials",
+    ]
 
-FINAL_EXPORT_LIST = BASE_TABLES + SEMANTIC_TABLES
+    for table in base_tables:
+        df = con.execute(f"SELECT * FROM {table}").fetchdf()
+        write_table(sqlite_conn, table, df)
 
-print("\nTables to export:")
-for t in FINAL_EXPORT_LIST:
-    print("  -", t)
+    # ------------------------------------
+    # 2. KPI views (optional but recommended)
+    # ------------------------------------
+    kpi_views = [
+        "vw_pnl_monthly",
+        "vw_customer_profitability",
+        "vw_product_profitability",
+    ]
 
+    for view in kpi_views:
+        try:
+            df = con.execute(f"SELECT * FROM {view}").fetchdf()
+            write_table(sqlite_conn, view, df)
+        except Exception as e:
+            print(f"  ⚠ Warning: Could not export view {view} → {e}")
 
-# ============================================================
-# 4. Export each table/view
-# ============================================================
-for table_name in FINAL_EXPORT_LIST:
-    print(f"\nExporting: {table_name}")
-    
+    # ------------------------------------
+    # 3. ML Output: predicted_churn
+    # ------------------------------------
     try:
-        df = duck_con.execute(f"SELECT * FROM {table_name}").df()
-    except Exception as e:
-        print(f"ERROR reading '{table_name}': {e}")
-        continue
+        df = con.execute("SELECT * FROM predicted_churn").fetchdf()
+        write_table(sqlite_conn, "predicted_churn", df)
+    except Exception:
+        print("  ⚠ No 'predicted_churn' table found. Please run churn_model.py first.")
 
-    df.to_sql(table_name, sqlite_con, if_exists="replace", index=False)
-    print(f"→ Exported {len(df):,} rows")
+    sqlite_conn.close()
+    con.close()
+
+    print(f"🏁 Export complete. SQLite database created at: {SQLITE_PATH}")
 
 
-# ============================================================
-# 5. Vacuum & close (important for Power BI)
-# ============================================================
-sqlite_con.execute("VACUUM")      # <-- REQUIRED FOR POWER BI
-sqlite_con.commit()
-duck_con.close()
-sqlite_con.close()
-
-print("\nAll tables exported successfully!")
-print(f"SQLite file ready → {SQLITE_PATH}")
+if __name__ == "__main__":
+    export_to_sqlite()
