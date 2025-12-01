@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS dim_customer (
     customer_id         INTEGER PRIMARY KEY,
     segment             VARCHAR,
     region              VARCHAR,
+    risk_score          DECIMAL(6,2),
     acquisition_date    DATE,
     churn_date          DATE,
     is_active           INTEGER
