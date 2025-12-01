@@ -47,3 +47,4 @@ Thumbs.db
 # Power BI autosave files
 # ------------------------------------
 *.pbix.autosave
+data/
