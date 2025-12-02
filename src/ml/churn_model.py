@@ -1,26 +1,18 @@
 # src/ml/churn_model.py
-
 """
 Churn prediction model.
 
 Pipeline:
-1. Connect to DuckDB warehouse (finance.duckdb)
-2. Build customer-level feature set from:
-   - dim_customer
-   - vw_customer_activity_monthly (SQL view)
-3. Train a classification model to predict churn (is_active=0 → churned)
-4. Evaluate model performance (ROC-AUC, accuracy)
-5. Write predictions to:
-   - DuckDB table: predicted_churn
-   - CSV: data/processed/predicted_churn.csv
+1. Load customer-level features from DuckDB.
+2. Train a RandomForest churn classifier.
+3. Evaluate (ROC-AUC, accuracy).
+4. Save predictions back into DuckDB + CSV.
+5. Exported churn scores feed Power BI (Page 4: Churn Risk).
 
-This integrates with the rest of the platform:
-- Power BI can read predicted_churn via finance.sqlite
-- Business users can see churn risk per customer/segment/region
+This module is part of the Enterprise Financial KPI Platform.
 """
 
 from datetime import date
-
 import duckdb
 import numpy as np
 import pandas as pd
@@ -35,30 +27,27 @@ from sklearn.metrics import roc_auc_score, accuracy_score, classification_report
 from src.config import PROJECT_ROOT, RNG_SEED
 
 
-# -----------------------------
-# Paths & constants
-# -----------------------------
+# ---------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------
 DUCKDB_PATH = PROJECT_ROOT / "finance.duckdb"
 DATA_PROCESSED = PROJECT_ROOT / "data" / "processed"
 DATA_PROCESSED.mkdir(parents=True, exist_ok=True)
 
 
-# -----------------------------
-# 1. Load data from DuckDB
-# -----------------------------
+# ---------------------------------------------------------------------
+# 1. Load Feature Table
+# ---------------------------------------------------------------------
 def load_feature_table() -> pd.DataFrame:
     """
-    Build a customer-level feature table from DuckDB.
+    Build a customer-level feature set from DuckDB using:
 
-    Uses:
-      - dim_customer
-      - vw_customer_activity_monthly
+    - dim_customer
+    - vw_customer_activity_monthly
     """
 
     con = duckdb.connect(str(DUCKDB_PATH))
 
-    # Aggregate customer activity into features
-    # (You can adjust / extend this SQL if you want more features.)
     query = """
     WITH activity AS (
         SELECT
@@ -94,41 +83,37 @@ def load_feature_table() -> pd.DataFrame:
     df = con.execute(query).fetchdf()
     con.close()
 
-    # Basic feature engineering in pandas
+    # Convert date columns
     df["acquisition_date"] = pd.to_datetime(df["acquisition_date"])
     df["churn_date"] = pd.to_datetime(df["churn_date"])
 
-    # Tenure in days up to either churn date or dataset end
-    dataset_end = df["acquisition_date"].max()  # rough, you can also plug END_DATE from config
-    dataset_end = max(dataset_end, df["churn_date"].max(skipna=True))
+    # Determine dataset end
+    dataset_end = df["acquisition_date"].max()
+    last_churn = df["churn_date"].max(skipna=True)
+    dataset_end = max(dataset_end, last_churn)
 
-    # If churned: tenure = churn_date - acquisition_date
-    # If active: tenure = dataset_end - acquisition_date
+    # ------------------------------------------------------------------
+    # Tenure computation (Pylance-safe: no .dt.days)
+    # ------------------------------------------------------------------
+    delta_churn = (df["churn_date"] - df["acquisition_date"]).astype("timedelta64[ns]")
+    delta_end = (dataset_end - df["acquisition_date"]).astype("timedelta64[ns]")
+
     df["tenure_days"] = np.where(
         df["churn_date"].notna(),
-        (df["churn_date"] - df["acquisition_date"]).dt.days,
-        (dataset_end - df["acquisition_date"]).dt.days,
-    )
+        delta_churn / np.timedelta64(1, "D"),
+        delta_end / np.timedelta64(1, "D")
+    ).astype(int)
 
-    # Label: churned = 1 if NOT active
+    # Label (1 = churned)
     df["churn_label"] = (df["is_active"] == 0).astype(int)
-
-    # Keep only customers with some tenure > 0
-    df = df[df["tenure_days"].fillna(0) >= 0]
 
     return df
 
 
-# -----------------------------
-# 2. Build model pipeline
-# -----------------------------
-def build_model_pipeline() -> tuple[Pipeline, list[str], list[str]]:
-    """
-    Create a scikit-learn pipeline with:
-    - OneHotEncoder for categorical features
-    - RandomForestClassifier as the model
-    """
-
+# ---------------------------------------------------------------------
+# 2. Model Pipeline
+# ---------------------------------------------------------------------
+def build_model_pipeline():
     numeric_features = [
         "risk_score",
         "active_months",
@@ -151,24 +136,21 @@ def build_model_pipeline() -> tuple[Pipeline, list[str], list[str]]:
 
     model = RandomForestClassifier(
         n_estimators=200,
-        max_depth=None,
         random_state=RNG_SEED,
-        n_jobs=-1,
+        n_jobs=-1
     )
 
-    clf = Pipeline(
-        steps=[
-            ("preprocess", preprocessor),
-            ("model", model),
-        ]
-    )
+    clf = Pipeline(steps=[
+        ("preprocess", preprocessor),
+        ("model", model)
+    ])
 
     return clf, numeric_features, categorical_features
 
 
-# -----------------------------
-# 3. Train, evaluate, save predictions
-# -----------------------------
+# ---------------------------------------------------------------------
+# 3. Train + Predict
+# ---------------------------------------------------------------------
 def train_and_predict():
     df = load_feature_table()
 
@@ -188,10 +170,11 @@ def train_and_predict():
     X = df[feature_cols]
     y = df["churn_label"]
 
-    clf, num_cols, cat_cols = build_model_pipeline()
+    clf, _, _ = build_model_pipeline()
 
+    # Train-test split
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.25, random_state=RNG_SEED, stratify=y
+        X, y, test_size=0.25, stratify=y, random_state=RNG_SEED
     )
 
     print("Training churn model...")
@@ -201,55 +184,67 @@ def train_and_predict():
     y_proba = clf.predict_proba(X_test)[:, 1]
     y_pred = (y_proba >= 0.5).astype(int)
 
-    roc = roc_auc_score(y_test, y_proba)
-    acc = accuracy_score(y_test, y_pred)
-
-    print(f"ROC-AUC: {roc:.3f}")
-    print(f"Accuracy: {acc:.3f}")
-    print("Classification report:")
+    print(f"ROC-AUC: {roc_auc_score(y_test, y_proba):.3f}")
+    print(f"Accuracy: {accuracy_score(y_test, y_pred):.3f}")
     print(classification_report(y_test, y_pred, digits=3))
 
-    # Fit on full data for final predictions
+    # Final fit on entire dataset
     clf.fit(X, y)
     df["churn_probability"] = clf.predict_proba(X)[:, 1]
 
-    # Save predictions
-    save_predictions(df[["customer_id", "churn_label", "churn_probability"]])
+    # --------------------------------------------------------------
+    #  NEW BUSINESS-FRIENDLY CHURN PROBABILITY BANDS
+    # --------------------------------------------------------------
+    df["churn_probability_band"] = pd.cut(
+        df["churn_probability"],
+        bins=[0, 0.30, 0.70, 1.0],
+        labels=["Low (0–30%)", "Medium (30–70%)", "High (70–100%)"],
+        include_lowest=True
+    )
+
+    df["churn_probability_band_sort"] = pd.cut(
+        df["churn_probability"],
+        bins=[0, 0.30, 0.70, 1.0],
+        labels=[1, 2, 3],
+        include_lowest=True
+    ).astype(int)
+
+    # Save
+    save_predictions(df[[
+        "customer_id",
+        "churn_label",
+        "churn_probability",
+        "churn_probability_band",
+        "churn_probability_band_sort"
+    ]])
 
     print("Churn prediction completed.")
 
 
-# -----------------------------
-# 4. Persist predictions
-# -----------------------------
+# ---------------------------------------------------------------------
+# 4. Save Predictions to DuckDB + CSV
+# ---------------------------------------------------------------------
 def save_predictions(pred_df: pd.DataFrame):
-    """
-    Save predictions to:
-      - DuckDB table: predicted_churn
-      - CSV: data/processed/predicted_churn.csv
-    """
-
-    run_date = date.today().isoformat()
     pred_df = pred_df.copy()
-    pred_df["run_date"] = run_date
+    pred_df["run_date"] = date.today().isoformat()
 
-    # Save CSV for inspection / Power BI via SQLite export
+    # CSV
     csv_path = DATA_PROCESSED / "predicted_churn.csv"
     pred_df.to_csv(csv_path, index=False)
     print(f"Saved predictions to: {csv_path}")
 
-    # Write to DuckDB table
+    # DuckDB
     con = duckdb.connect(str(DUCKDB_PATH))
     con.execute("DROP TABLE IF EXISTS predicted_churn")
-    con.execute(
-        """
-        CREATE TABLE predicted_churn AS
-        SELECT * FROM pred_df
-        """
-    )
+    con.register("pred_df", pred_df)
+    con.execute("CREATE TABLE predicted_churn AS SELECT * FROM pred_df")
     con.close()
+
     print("Saved predictions to DuckDB table: predicted_churn")
 
 
+# ---------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------
 if __name__ == "__main__":
     train_and_predict()

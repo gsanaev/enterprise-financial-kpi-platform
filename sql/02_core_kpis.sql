@@ -91,7 +91,7 @@ JOIN vw_cogs_monthly c USING(year_month_key)
 LEFT JOIN vw_opex_monthly o USING(year_month_key);
 
 ---------------------------------------------------------
--- CUSTOMER PROFITABILITY
+-- CUSTOMER PROFITABILITY (UPDATED WITH REVENUE BANDS)
 ---------------------------------------------------------
 
 CREATE OR REPLACE VIEW vw_customer_profitability AS
@@ -99,14 +99,36 @@ SELECT
     c.customer_id,
     c.segment,
     c.region,
+
     SUM(t.net_revenue) AS total_revenue,
     SUM(t.direct_cost) AS total_cogs,
     SUM(t.net_revenue) - SUM(t.direct_cost) AS gross_margin,
-    (SUM(t.net_revenue) - SUM(t.direct_cost))
-        / NULLIF(SUM(t.net_revenue),0) AS gross_margin_pct
+    (SUM(t.net_revenue) - SUM(t.direct_cost)) / NULLIF(SUM(t.net_revenue), 0) AS gross_margin_pct,
+
+    -- Revenue Band
+    CASE
+        WHEN SUM(t.net_revenue) < 1000 THEN '<1K'
+        WHEN SUM(t.net_revenue) < 5000 THEN '1K–5K'
+        WHEN SUM(t.net_revenue) < 10000 THEN '5K–10K'
+        WHEN SUM(t.net_revenue) < 50000 THEN '10K–50K'
+        WHEN SUM(t.net_revenue) < 200000 THEN '50K–200K'
+        ELSE '200K+'
+    END AS revenue_band,
+
+    -- Sort key for band ordering
+    CASE
+        WHEN SUM(t.net_revenue) < 1000 THEN 1
+        WHEN SUM(t.net_revenue) < 5000 THEN 2
+        WHEN SUM(t.net_revenue) < 10000 THEN 3
+        WHEN SUM(t.net_revenue) < 50000 THEN 4
+        WHEN SUM(t.net_revenue) < 200000 THEN 5
+        ELSE 6
+    END AS revenue_band_sort
+
 FROM fact_transactions t
-JOIN dim_customer c USING(customer_id)
+JOIN dim_customer c USING (customer_id)
 GROUP BY 1,2,3;
+
 
 ---------------------------------------------------------
 -- CUSTOMER ACTIVITY BY MONTH
