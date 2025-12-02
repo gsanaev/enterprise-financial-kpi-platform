@@ -171,18 +171,20 @@ Power BI connects directly to this file.
 
 *(Insert screenshots when ready)*
 
-**1. Financial Performance Overview**  
-*[Insert Screenshot: P&L Overview]**
+### **1. Financial Performance Overview**  
+![Financial Overview](dashboards/page1_overview.png)
 
-**2. Product Profitability & Revenue Share**  
-*[Insert Screenshot: Product Profitability Heatmap]* 
+### **2. Product Profitability & Revenue Share**  
+![Product Profitability](dashboards/page2_product_profitability.png)
 
-**3. Customer & Segment Insights**  
-*[Insert Screenshot: Segment Revenue & Margin Dashboard]*
+### **3. Customer & Segment Insights**  
+![Customer Insights](dashboards/page3_customer_segments.png)
 
-**4. Churn Risk Management**  
-*[Insert Screenshot: Churn Probability Distribution]*
-*[Insert Screenshot: High-Value Customers at Risk]*
+### **4. Churn Risk Management**  
+![Churn Probability Distribution](dashboards/page4_churn_risk.png)
+
+### **5. Executive Summary Dashboard**
+![Executive Summary](dashboards/page5_executive_summary.png)
 
 ## 🏦 Relevance to Banking & Finance in Frankfurt
 
